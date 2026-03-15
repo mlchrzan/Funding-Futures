@@ -71,7 +71,7 @@ This notebook is scaffolded into three parts. Read every section, run the code, 
 The `edfinr` package gives you access to a powerful, tidy dataset combining three major federal data sources for every K-12 school district in the United States (school years 2011–12 through 2021–22):
 
 | Source | What it measures |
-|----|----|
+|------------------------------------|------------------------------------|
 | **NCES F-33 Survey** | How each district raises money (local, state, federal revenue) and spends it (instruction, support, administration) |
 | **Census SAIPE** | Poverty rate estimates at the school-district level |
 | **ACS 5-Year Estimates** | Community demographics: income, educational attainment, and more |
