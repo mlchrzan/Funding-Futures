@@ -1,0 +1,811 @@
+---
+title: "Funding Futures: Exploring K-12 Education Finance Equity with R"
+subtitle: "A Guided Notebook Using the `edfinr` Package and the C2C Student Pathways Dashboard"
+author: "Lesson Plan Challenge — Introduction to Education Policy & Data Science"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    theme: flatly
+    highlight: tango
+    toc: true
+    toc_float:
+      collapsed: false
+      smooth_scroll: true
+    number_sections: true
+    code_folding: show
+    df_print: paged
+---
+
+```{css, echo=FALSE}
+/* Custom styling for the notebook */
+body { font-family: 'Segoe UI', Calibri, sans-serif; font-size: 15px; }
+h1, h2, h3 { color: #005F73; }
+h1 { border-bottom: 3px solid #0A9396; padding-bottom: 6px; }
+.callout {
+  background-color: #D4ECF0;
+  border-left: 5px solid #005F73;
+  padding: 12px 16px;
+  margin: 14px 0;
+  border-radius: 3px;
+}
+.gold-box {
+  background-color: #FFF3CD;
+  border-left: 5px solid #EE9B00;
+  padding: 12px 16px;
+  margin: 14px 0;
+  border-radius: 3px;
+}
+.reflect {
+  background-color: #F4F0FB;
+  border-left: 5px solid #7C5CBF;
+  padding: 12px 16px;
+  margin: 14px 0;
+  border-radius: 3px;
+}
+.dashboard-tip {
+  background-color: #EDF7ED;
+  border-left: 5px solid #2E7D32;
+  padding: 12px 16px;
+  margin: 14px 0;
+  border-radius: 3px;
+}
+code { color: #C7254E; background-color: #F9F2F4; padding: 2px 4px; border-radius: 3px; }
+```
+
+------------------------------------------------------------------------
+
+::: callout
+**Welcome to this guided notebook!** You will use real U.S. school district finance data to explore a central question in education equity:
+
+> *Does where you grow up — and how much money your school district has — shape your path to college and career?*
+
+This notebook is scaffolded into three parts. Read every section, run the code, and answer the reflection questions as you go. There are no wrong answers — just careful thinking.
+:::
+
+------------------------------------------------------------------------
+
+# Part A: Getting Started with `edfinr`
+
+## What is `edfinr`?
+
+The `edfinr` package gives you access to a powerful, tidy dataset combining three major federal data sources for every K-12 school district in the United States (school years 2011–12 through 2021–22):
+
+| Source | What it measures |
+|----|----|
+| **NCES F-33 Survey** | How each district raises money (local, state, federal revenue) and spends it (instruction, support, administration) |
+| **Census SAIPE** | Poverty rate estimates at the school-district level |
+| **ACS 5-Year Estimates** | Community demographics: income, educational attainment, and more |
+
+By combining these, `edfinr` lets us ask: *How does a community's poverty level connect to the resources its schools receive?*
+
+## Install and Load Packages
+
+Run this chunk first. If you're using **Posit Cloud**, these packages may already be available. If you're on your own computer, the install lines will download them.
+
+```{r setup, message=FALSE, warning=FALSE}
+# Uncomment these lines if you need to install packages
+# install.packages("edfinr")
+# install.packages("tidyverse")
+# install.packages("scales")
+# install.packages("ggrepel")
+# install.packages("skimr")
+
+library(edfinr)
+library(tidyverse)
+library(scales)
+library(ggrepel)
+library(skimr)
+
+# Set a clean ggplot theme for all our visualizations
+theme_set(
+  theme_minimal(base_size = 13) +
+    theme(
+      plot.title    = element_text(color = "#005F73", face = "bold", size = 15),
+      plot.subtitle = element_text(color = "#444444", size = 12),
+      axis.title    = element_text(color = "#333333"),
+      strip.text    = element_text(face = "bold", color = "#005F73"),
+      panel.grid.minor = element_blank()
+    )
+)
+```
+
+## Explore Available Geographies
+
+Before downloading data, let's see what states are available.
+
+```{r explore-states}
+# View all available state codes
+states <- get_states()
+print(states)
+```
+
+::: callout
+**What do you notice?** The data covers all 50 states plus D.C. We'll focus on California to connect our analysis to the **C2C Student Pathways Dashboard**, which covers California K-12 districts.
+:::
+
+## Download California Finance Data
+
+```{r load-ca-data, message=FALSE, cache=TRUE}
+# Download California school district data for 2021-22
+# The 'skinny' dataset has 41 key variables — just right for exploration
+ca_data <- get_finance_data(
+  yr           = "2022",
+  geo          = "CA",
+  dataset_type = "skinny"
+)
+
+# Take a first look
+skim(ca_data)
+```
+
+## Explore Key Variables
+
+The dataset contains many variables. Let's focus on the most important ones for equity analysis.
+
+```{r key-variables}
+# Select and examine key variables
+ca_key <- ca_data |>
+  select(
+    # Identifiers
+    ncesid, dist_name, lea_type,
+    # Geography
+    urbanicity,
+    # Enrollment
+    enroll,
+    # Revenue (per pupil)
+    rev_total_pp,     # Total revenue per pupil
+    rev_local_pp,     # Local revenue per pupil (mostly property taxes)
+    rev_state_pp,     # State aid per pupil
+    rev_fed_pp,       # Federal revenue per pupil
+    # Expenditures
+    exp_cur_pp,   # Current expenditures per pupil
+    # Demographics
+    stpov_pct,   # % students in poverty (SAIPE)
+    # CPI adjustment index (not present here since cpi_adj='none' by default)
+  ) |>
+  filter(!is.na(rev_total_pp), !is.na(stpov_pct), enroll > 0)
+
+# Summary statistics
+summary(ca_key[, c("rev_total_pp", "rev_local_pp", "rev_state_pp", "stpov_pct", "enroll")])
+
+# Visualized
+ca_key[, c("rev_total_pp", "rev_local_pp", "rev_state_pp", "stpov_pct", "enroll")] |> 
+  pivot_longer(cols = everything()) |> 
+  mutate(name = case_when(
+    name == 'enroll' ~ "Enrollment", 
+    name == 'rev_local_pp' ~ "Local\nPer-Pupil\nExpenditure",
+    name == 'rev_state_pp' ~ "State\nPer-Pupil\nExpenditure",
+    name == 'rev_total_pp' ~ "Total\nPer-Pupil\nExpenditure",
+    name == 'stpov_pct' ~ "% Students\nin Poverty"
+  )) |> 
+  ggplot(aes(x = name,
+             y = value)) + 
+  geom_boxplot(fill = "#005F73") +
+  facet_wrap(~name, scales = 'free', ncol = 5) +
+  theme(axis.text.x = element_blank()) +
+  labs(x = 'variable', 
+       title = "Summary of Key Variables",
+       caption  = "Source: edfinr")
+```
+
+::: reflect
+**Checkpoint A.1 — Reflection:**
+
+-   What is the range of total per-pupil revenue across California districts? What does the gap between the minimum and maximum tell you?
+-   What is the median poverty rate? How does that compare to what you expected?
+
+*Write 2–3 sentences below (use a `#` comment):*
+
+```{r checkpoint-a1}
+# YOUR ANSWER HERE:
+# 
+```
+:::
+
+------------------------------------------------------------------------
+
+# Part B: Equity Visualizations
+
+## The Core Question: Does Poverty Predict Funding?
+
+In theory, the U.S. education funding system should direct more money to districts with greater need. In practice, because local property taxes are a major funding source, districts with low property values (which correlate with poverty) often receive less money.
+
+Let's see what the data shows.
+
+```{r scatter-poverty-revenue, fig.width=9, fig.height=6, warning=FALSE}
+# Scatter plot: poverty rate vs. per-pupil revenue, colored by district locale
+
+ggplot(ca_key, 
+       aes(x = stpov_pct, 
+           y = rev_total_pp, 
+           color = urbanicity, 
+           size = enroll)) +
+  geom_point(alpha = 0.55) +
+  geom_smooth(aes(group = 1), 
+              # aes(color = urbanicity),
+              method = "lm", 
+              se = TRUE, 
+              color = "red4",
+              linewidth = 1.2, 
+              linetype = "dashed", 
+              fill = "#D4ECF0") +
+  scale_y_continuous(labels = dollar_format(scale = 1)) +
+  scale_x_continuous(labels = percent_format(scale = 1)) +
+  scale_size_continuous(range = c(1, 8), 
+                        labels = comma) +
+  scale_color_manual(values = c(City = "#005F73", 
+                                Suburb = "#0A9396",
+                                Town = "#94D2BD", 
+                                Rural = "#EE9B00", 
+                                Other = "#888888")) +
+  labs(
+    title    = "Per-Pupil Revenue vs. Student Poverty Rate, California Districts (2021-22)",
+    subtitle = "Each point is one school district. Size reflects enrollment. Darker points indicate more urbanicity.",
+    x        = "Percentage of Students in Poverty",
+    y        = "Total Revenue Per Pupil (USD)",
+    color    = "District Locale",
+    size     = "Enrollment",
+    caption  = "Source: edfinr | NCES F-33 + Census SAIPE"
+  ) +
+  theme(legend.position = "right")
+```
+
+::: reflect
+**Checkpoint B.1 — Discussion:**
+
+Look carefully at the scatter plot and the trend line.
+
+1.  Does higher poverty **predict more or less** per-pupil revenue? Does the trend line slope upward or downward?
+2.  Are there districts that seem to "break the pattern"? Where are they located (urban/rural/suburban)?
+3.  What might explain districts with **high poverty AND high revenue**? (Hint: think about federal Title I funding)
+
+*Answer in comments below:*
+
+```{r checkpoint-b1}
+# YOUR ANSWER HERE:
+# 1.
+# 2.
+# 3.
+```
+:::
+
+## Revenue Sources: Who Funds Whom?
+
+Let's break down revenue by source to understand the story better.
+
+```{r revenue-by-source, fig.width=9, fig.height=5.5, warning=FALSE}
+# Categorize districts into poverty quartiles
+ca_key <- ca_key |>
+  mutate(
+    poverty_quartile = ntile(stpov_pct, 4),
+    poverty_label = case_when(
+      poverty_quartile == 1 ~ "Q1: Lowest Poverty",
+      poverty_quartile == 2 ~ "Q2",
+      poverty_quartile == 3 ~ "Q3",
+      poverty_quartile == 4 ~ "Q4: Highest Poverty"
+    )
+  )
+
+# Average revenue by source and poverty quartile
+revenue_summary <- ca_key |>
+  group_by(poverty_label) |>
+  summarize(
+    Local   = mean(rev_local_pp, na.rm = TRUE),
+    State   = mean(rev_state_pp, na.rm = TRUE),
+    Federal = mean(rev_fed_pp,   na.rm = TRUE),
+    .groups = "drop"
+  ) |>
+  pivot_longer(cols = c(Local, State, Federal), 
+               names_to = "Source", 
+               values_to = "Revenue_PP")
+
+ggplot(revenue_summary, 
+       aes(x = poverty_label, 
+           y = Revenue_PP, fill = Source)) +
+  geom_col(position = "dodge") +
+  scale_y_continuous(labels = dollar_format(scale = 1)) +
+  scale_fill_manual(values = c(Local = "#005F73", 
+                               State = "#0A9396", 
+                               Federal = "#EE9B00")) +
+  labs(
+    title    = "Average Per-Pupil Revenue by Source and Poverty Quartile (CA, 2021-22)",
+    subtitle = "Districts are grouped into quartiles by student poverty rate",
+    x        = "District Poverty Quartile",
+    y        = "Average Revenue Per Pupil (USD)",
+    fill     = "Revenue Source",
+    caption  = "Source: edfinr | NCES F-33 + Census SAIPE"
+  ) +
+  theme(axis.text.x = element_text(angle = 15, hjust = 1))
+```
+
+::: gold-box
+**What to look for:** - **Local revenue** should be higher for low-poverty districts (wealthy property tax base). - **Federal revenue** should be higher for high-poverty districts (Title I targeting). - **State revenue** should partially compensate — but does it fully close the gap?
+:::
+
+::: reflect
+**Checkpoint B.2 — Reflection:**
+
+After viewing the grouped bar chart:
+
+1.  Does local revenue follow the pattern you expected (higher in low-poverty districts)?
+2.  Does federal revenue compensate adequately? Does it fully close the gap?
+3.  What would a **truly equitable** funding system look like? Describe it in 2 sentences.
+
+```{r checkpoint-b2}
+# YOUR ANSWER HERE:
+# 1.
+# 2.
+# 3.
+```
+:::
+
+## Multi-Year Trend: How Has Funding Changed Over Time?
+
+Let's load multiple years of data to see trends. We'll use CPI adjustment to compare dollars fairly across years.
+
+```{r multi-year, message=FALSE, cache=TRUE, fig.width=9, fig.height=5.5, warning=FALSE}
+# Download 5 years of California data, adjusted to 2022 dollars
+ca_multi <- get_finance_data(
+  yr           = "2018:2022",
+  geo          = "CA",
+  dataset_type = "skinny",
+  cpi_adj      = "2022"   # All values in 2021-22 dollars
+)
+
+# Annual median per-pupil revenue, split by high vs. low poverty
+ca_trend <- ca_multi |>
+  filter(!is.na(rev_total_pp), 
+         !is.na(stpov_pct), 
+         enroll > 0) |>
+  mutate(
+    high_poverty = ifelse(stpov_pct >= median(stpov_pct, na.rm = TRUE),
+                          "Higher Poverty Districts", 
+                          "Lower Poverty Districts")
+  ) |>
+  group_by(year, high_poverty) |>
+  summarize(median_rev_pp = median(rev_total_pp, 
+                                   na.rm = TRUE), 
+            .groups = "drop")
+
+ggplot(ca_trend, 
+       aes(x = year, 
+           y = median_rev_pp,
+           color = high_poverty, 
+           group = high_poverty)) +
+  geom_line(linewidth = 1.5) +
+  geom_point(size = 3.5) +
+  scale_y_continuous(labels = dollar_format(scale = 1)) +
+  scale_color_manual(values = c("Higher Poverty Districts" = "#EE9B00",
+                                "Lower Poverty Districts"  = "#005F73")) +
+  labs(
+    title    = "Median Per-Pupil Revenue Trend, California (2018–2022, 2022 Dollars)",
+    subtitle = "Districts split by poverty level — CPI-adjusted for fair comparison",
+    x        = "School Year",
+    y        = "Median Revenue Per Pupil (2022 USD)",
+    color    = NULL,
+    caption  = "Source: edfinr | CPI-adjusted using CPI-U"
+  ) +
+  theme(legend.position = "top")
+```
+
+## (Optional) Compare Two States
+
+Now let's compare California with another state (potential your home state) to see structural differences.
+
+```{r two-states, message=FALSE, cache=TRUE, fig.width=9, fig.height=5.5, warning=FALSE}
+# Download data for California and Texas
+regional <- get_finance_data(
+  yr           = "2022",
+  geo          = "CA,TX",
+  dataset_type = "skinny"
+)
+
+# Density plot of per-pupil revenue distributions
+regional_clean <- regional |>
+  filter(!is.na(rev_total_pp), enroll > 0) |>
+  mutate(state = ifelse(str_detect(ncesid, "^06"), 
+                        "California", 
+                        "Texas"))
+
+ggplot(regional_clean, 
+       aes(x = rev_total_pp, 
+           fill = state, 
+           color = state)) +
+  geom_density(alpha = 0.35, 
+               linewidth = 1.2) +
+  geom_vline(data = regional_clean |> 
+               group_by(state) |> 
+               summarize(med = median(rev_total_pp, na.rm=TRUE)),
+             aes(xintercept = med, color = state), 
+             linetype = "dashed", linewidth = 1) +
+  scale_x_continuous(labels = dollar_format(scale = 1), 
+                     limits = c(0, 30000)) +
+  scale_fill_manual(values  = c(California = "#005F73", 
+                                Texas = "#EE9B00")) +
+  scale_color_manual(values = c(California = "#005F73", 
+                                Texas = "#EE9B00")) +
+  labs(
+    title    = "Distribution of Per-Pupil Revenue: California vs. Texas (2021-22)",
+    subtitle = "Dashed lines show median per-pupil revenue in each state",
+    x        = "Total Revenue Per Pupil (USD)",
+    y        = "Density",
+    fill     = NULL, color = NULL,
+    caption  = "Source: edfinr | NCES F-33"
+  ) +
+  theme(legend.position = "top")
+```
+
+::: reflect
+**Checkpoint B.3 — Comparison:**
+
+1.  Which state has a wider distribution of per-pupil revenue? What does a wider distribution suggest about **equity within** that state?
+2.  Does one state's median funding significantly differ from the other's?
+3.  Which state would you predict has more equitable student outcomes on the C2C dashboard, and why?
+
+```{r checkpoint-b3}
+# YOUR ANSWER HERE:
+# 1.
+# 2.
+# 3.
+```
+:::
+
+------------------------------------------------------------------------
+
+# Part C: Connecting to the C2C Student Pathways Dashboard
+
+## Bridge: From Finance Data to Student Outcomes
+
+The `edfinr` data tells us about **inputs** (money going into the system). The **C2C Student Pathways Dashboard** shows us **outputs** (student outcomes like graduation rates and college enrollment).
+
+Now we connect the two.
+
+::: dashboard-tip
+**Action: Open the C2C Dashboard**
+
+Go to: [**https://databydesign.caschooldashboard.org/**](https://databydesign.caschooldashboard.org/){.uri}
+
+1.  Navigate to any California school district
+2.  Apply the **"Socioeconomically Disadvantaged"** filter under student groups
+3.  Compare outcomes to non-disadvantaged peers
+4.  Click the **"How do I read this chart?"** pop-out box and read the explanation
+5.  Click any ⓘ **information circle** for variable definitions
+6.  Look for any **blank or greyed-out** data cells — these are **suppressed data points**
+:::
+
+## Understanding Data Suppression
+
+The C2C dashboard hides data for student groups with **10 or fewer individuals**. This is the **Cradle-to-Career System Data Suppression Protocol**.
+
+```{r suppression-concept, fig.width=8, fig.height=4.5, warning=FALSE}
+# Illustrate data suppression conceptually:
+# How many California districts have small enrollment in a given subgroup?
+# (We'll use total enrollment as a proxy — real subgroup counts would be smaller)
+
+suppression_demo <- ca_data |>
+  filter(!is.na(enroll)) |>
+  mutate(
+    suppression_risk = case_when(
+      enroll <= 50  ~ "Very High Risk\n(enrollment ≤ 50)",
+      enroll <= 200 ~ "High Risk\n(50 < enrollment ≤ 200)",
+      enroll <= 500 ~ "Moderate Risk\n(200 < enrollment ≤ 500)",
+      TRUE              ~ "Lower Risk\n(enrollment > 500)"
+    ),
+    suppression_risk = factor(suppression_risk, levels = c(
+      "Very High Risk\n(enrollment ≤ 50)",
+      "High Risk\n(50 < enrollment ≤ 200)",
+      "Moderate Risk\n(200 < enrollment ≤ 500)",
+      "Lower Risk\n(enrollment > 500)"
+    ))
+  ) |>
+  count(suppression_risk)
+
+ggplot(suppression_demo, aes(x = suppression_risk, 
+                             y = n, 
+                             fill = suppression_risk)) +
+  geom_col(width = 0.65) +
+  geom_text(aes(label = comma(n)), 
+            vjust = -0.4, 
+            size = 4, 
+            fontface = "bold") +
+  scale_fill_manual(values = c(
+    "Very High Risk\n(enrollment ≤ 50)"      = "#C0392B",
+    "High Risk\n(50 < enrollment ≤ 200)"     = "#E67E22",
+    "Moderate Risk\n(200 < enrollment ≤ 500)"= "#F1C40F",
+    "Lower Risk\n(enrollment > 500)"         = "#005F73"
+  )) +
+  labs(
+    title    = "Data Suppression Risk by District Size, California",
+    x        = NULL,
+    y        = "Number of Districts",
+    caption  = "Source: edfinr enrollment data | Note: subgroup counts are smaller than district totals",
+    fill     = NULL
+  ) +
+  theme(legend.position = "none", 
+        axis.text.x = element_text(size = 11))
+```
+
+::: reflect
+**Checkpoint C.1 — Data Suppression Reflection:**
+
+1.  Which districts are most likely to have data suppressed for specific student subgroups?
+2.  Think about who attends small rural schools or small charter schools. Which communities are most likely to be **invisible** in the C2C data because of suppression?
+3.  Why might suppression be **both necessary and problematic** at the same time?
+
+```{r checkpoint-c1}
+# YOUR ANSWER HERE:
+# 1.
+# 2.
+# 3.
+```
+:::
+
+## Use the C2C Dashboard Resources
+
+::: dashboard-tip
+**Action: Explore C2C Companion Resources**
+
+While on the C2C dashboard, find and explore:
+
+-   📖 **Data Dictionary**: Look up the definition of "Socioeconomically Disadvantaged" — how does it compare to `stpov_pct` in edfinr?
+-   📺 **YouTube Explainer Video**: Watch the overview of how to read the dashboard
+-   📝 **Student Story Blog**: Read one story from a California student — how do they describe their K-12 experience?
+-   📊 **"Data points and sources used for this story"** section at the bottom of dashboard pages
+
+These are the **dashboard resources** that make the data accessible and human.
+:::
+
+## Final Analysis: Connect Your edfinr Findings to C2C
+
+```{r final-analysis, fig.width=9, fig.height=6, warning=FALSE}
+# Create a "spotlight" visualization: top 10 and bottom 10 districts by per-pupil revenue
+# in California, labeled for easy C2C lookup
+
+ca_spotlight <- ca_key |>
+  filter(enroll >= 500, 
+         !is.na(rev_total_pp), 
+         !is.na(dist_name)) |>
+  arrange(rev_total_pp) |>
+  slice(c(1:10, (n()-9):n())) |>
+  mutate(
+    group = ifelse(rev_total_pp <= quantile(ca_key$rev_total_pp[ca_key$enroll >= 500], 0.1, na.rm=TRUE),
+                   "Lowest Funded (Bottom 10)", "Highest Funded (Top 10)"),
+    lea_name_short = str_trunc(dist_name, 30)
+  )
+
+ggplot(ca_spotlight, 
+       aes(x = reorder(lea_name_short, rev_total_pp), 
+           y = rev_total_pp, 
+           fill = group, 
+           color = group)) +
+  geom_col(width = 0.7) +
+  geom_text(aes(label = dollar(rev_total_pp, scale = 1, accuracy = 100)),
+            hjust = -0.08, 
+            size = 3.2, 
+            fontface = "bold") +
+  coord_flip() +
+  scale_y_continuous(labels = dollar_format(scale = 1), 
+                     expand = expansion(mult = c(0, 0.25))) +
+  scale_fill_manual(values  = c("Lowest Funded (Bottom 10)" = "#EE9B00", "Highest Funded (Top 10)" = "#005F73")) +
+  scale_color_manual(values = c("Lowest Funded (Bottom 10)" = "#C47A00", "Highest Funded (Top 10)" = "#004A59")) +
+  labs(
+    title    = "Highest vs. Lowest Funded California Districts (≥500 students, 2021-22)",
+    subtitle = "Look up these districts on the C2C dashboard to connect funding to outcomes",
+    x        = NULL,
+    y        = "Total Revenue Per Pupil (USD)",
+    fill     = NULL, color = NULL,
+    caption  = "Source: edfinr | NCES F-33 + Census SAIPE"
+  ) +
+  theme(legend.position = "top", 
+        axis.text.y = element_text(size = 9))
+```
+
+::: reflect
+**Checkpoint C.2 — Integration Challenge:**
+
+Choose **one district** from the plot above and look it up on the C2C Student Pathways Dashboard.
+
+1.  What do the student outcome metrics (graduation rate, college enrollment, etc.) look like for this district?
+2.  Does the funding level seem to predict the outcomes you see?
+3.  Are any student subgroups **suppressed** in the dashboard data for this district? If so, which ones?
+4.  Using the C2C student story blog as a reference: how would you describe the **strengths** of students in this community, rather than only the challenges?
+
+```{r checkpoint-c2}
+# YOUR ANSWER HERE — District chosen: ___________
+# 1.
+# 2.
+# 3.
+# 4.
+```
+:::
+
+------------------------------------------------------------------------
+
+# Exit Ticket
+
+::: gold-box
+**Complete all four questions below.** This is your exit ticket — submit as a knitted HTML document or print your answers as comments in the code chunks below.
+:::
+
+```{r exit-ticket-1}
+# EXIT TICKET QUESTION 1: Research Question
+#
+# Write ONE specific, measurable, data-driven research question about K-12 
+# education equity. Name the specific variables and population.
+#
+# Example: "Does per-pupil instructional spending (from edfinr's full dataset)
+# predict higher 4-year graduation rates in high-poverty California districts
+# on the C2C Student Pathways Dashboard?"
+#
+# YOUR RESEARCH QUESTION:
+#
+
+```
+
+```{r exit-ticket-2}
+# EXIT TICKET QUESTION 2: Variables
+#
+# List:
+#   (a) Two edfinr variables you would use to answer your research question
+#   (b) One C2C dashboard filter you would apply
+#
+# (a) edfinr variables:
+#       1. 
+#       2. 
+#
+# (b) C2C dashboard filter:
+#       1.
+#
+
+```
+
+```{r exit-ticket-3}
+# EXIT TICKET QUESTION 3: Data Suppression
+#
+# In 2-3 sentences:
+#   - Define data suppression as used in the C2C dashboard
+#   - Explain the N ≤ 10 rule and why it exists
+#   - Describe how suppression could affect YOUR research question above
+#
+# YOUR ANSWER:
+#
+
+```
+
+```{r exit-ticket-4}
+# EXIT TICKET QUESTION 4: Reflection on Representation
+#
+# In ONE sentence: Name a community that is likely underrepresented 
+# in education finance data because of suppression or data gaps, 
+# and explain why their visibility in data matters.
+#
+# YOUR ANSWER:
+#
+
+```
+
+------------------------------------------------------------------------
+
+# Going Further (Optional Extensions)
+
+Interest peaked? Try these extensions to dig deeper into the data.
+
+## Try the `full` Dataset
+
+The full `edfinr` dataset has 89 variables including detailed expenditure breakdowns. Try loading it:
+
+```{r full-dataset, eval=FALSE}
+# Full dataset for California — more variables, slightly slower download
+ca_full <- get_finance_data(
+  yr           = "2022",
+  geo          = "CA",
+  dataset_type = "full"
+)
+
+# Explore additional expenditure variables
+ca_full |>
+  select(dist_name, enroll,
+         exp_instr_total,      # Total instructional spending
+         exp_tech_equip,       # Technology equipment
+         exp_supp_stu_total,   # Student support services
+         exp_emp_salary,       # Employee salaries
+         stpov_pct) |>
+  arrange(desc(exp_instr_total)) |>
+  head(20)
+```
+
+## Explore a Regional Comparison
+
+```{r regional-extension, eval=FALSE}
+# Compare a region of states — useful for policy comparisons
+midwest <- get_finance_data(
+  yr  = "2022",
+  geo = "IL,IN,OH,MI,WI",
+  dataset_type = "skinny"
+)
+
+# What is the funding gap in each state?
+midwest |>
+  filter(!is.na(rev_total_pp), 
+         !is.na(stpov_pct)) |>
+  group_by(state) |>
+  summarize(
+    median_rev_pp          = median(rev_total_pp, na.rm = TRUE),
+    rev_pp_high_pov_median = median(rev_total_pp[stpov_pct > median(stpov_pct, na.rm=TRUE)], na.rm=TRUE),
+    rev_pp_low_pov_median  = median(rev_total_pp[stpov_pct <= median(stpov_pct, na.rm=TRUE)], na.rm=TRUE),
+    funding_gap            = rev_pp_low_pov_median - rev_pp_high_pov_median
+  )
+```
+
+------------------------------------------------------------------------
+
+## Download the C2C Data and Explore
+
+```{r c2c-direct, eval=FALSE}
+# Download the "How much do students earn after they graduate?"
+# file from https://c2c.ca.gov/query-builder-student-pathways-dataset/ 
+
+# Load the file 
+c2c <- read_csv("wage_award_data_details.csv", 
+                show_col_types = F)
+
+# Skipped but recommended to skim
+# skim(c2c)
+
+# Filter to the All Demographics category and 
+# get individual district data for join
+c2c <- c2c |> 
+  filter(DEMO_CATEGORY == 'All',
+         DISTRICT_TYPE != 'All') |> 
+  # Adjust year variable for joining
+  mutate(year = str_extract(ACADEMIC_YEAR, "^\\d{4}"))
+
+# Join the data by district and year
+combined_data <- ca_multi |> 
+  mutate(DISTRICT_CODE = str_extract(state_leaid, "(?<=-).*")) |> 
+  left_join(c2c, 
+            by = join_by(DISTRICT_CODE, year)) |> 
+  filter(WAGE_YEAR1 > 0)
+
+# Visualize Trend
+combined_data |> 
+  group_by(AWARD_CATEGORY, year) |>
+  summarize(mean_WAGE_YEAR1 = mean(WAGE_YEAR1),
+            .groups = 'drop') |> 
+  ggplot(aes(x = year, 
+             y = mean_WAGE_YEAR1,
+             color = AWARD_CATEGORY, 
+             group = AWARD_CATEGORY)) + 
+  geom_point() + 
+  geom_line() +
+  scale_color_manual(values = c(
+    "Bachelor's Degree - Did Not Transfer" = "#005F73", 
+    "Bachelor's Degree - Transferred" = "#0A9396",
+    "Associate Degree" = "#94D2BD", 
+    "Community College Certificate" = "#EE9B00")) +
+  scale_y_continuous(labels = dollar_format(scale = 1)) +
+  labs(
+    title    = "Average Starting Wage Trend, California (2018–2022, 2022 Dollars)",
+    subtitle = "Students split by award type in their graduation year",
+    x        = "Graduation Year",
+    y        = "Mean Year 1 Wage (2022 USD)",
+    color    = NULL,
+    caption  = "Source: California C2c, edfinr | CPI-adjusted using CPI-U"
+  ) +
+  theme(legend.position = "top") + 
+  guides(color = guide_legend(nrow = 2))
+```
+
+::: callout
+**You've completed the Funding Futures notebook!**
+
+You've used real federal data to investigate one of the most persistent inequities in American education: the connection between where a child grows up and the resources their school receives.
+
+The `edfinr` package makes this kind of analysis accessible to everyone — not just professional researchers. The C2C dashboard makes the human consequences of these funding patterns visible and the data release allows us to deeply examine patterns of inequality.
+
+What will you do with what you've learned?
+:::
+
+------------------------------------------------------------------------
+
+*Data sources: NCES F-33 Survey, U.S. Census Bureau SAIPE, American Community Survey (ACS) via the `edfinr` package. C2C Student Pathways Dashboard: <https://databydesign.caschooldashboard.org/>*
